@@ -15,6 +15,7 @@
 
 #include <fstream>
 #include <type_traits>
+#include <string_view>
 
 #include <windows.h>
 
@@ -28,7 +29,7 @@ namespace EzPE
     {
         NONE = 0,
         MAPPED = 1 << 0, // Fully mapped to virtual memory
-        DATA = 1 << 1,     // Indicates that sections data should be considered
+        DATA = 1 << 1,   // Indicates that sections data should be considered
     };
 
     class PE
@@ -43,16 +44,17 @@ namespace EzPE
         public:
             IMAGE_SECTION_HEADER header;
 
-            Section(PE &_pe)
-                : pe(_pe) {};
+            Section(PE& _pe)
+                : pe(_pe) {
+            };
 
-            Section &name(const char *name)
+            Section& name(const char* name)
             {
                 memcpy(header.Name, name, (std::min)(static_cast<int>(strlen(name)), 8));
                 return *this;
             }
 
-            Section &data(size_t virtual_size, size_t file_size = 0, void *p_init_with = nullptr)
+            Section& data(size_t virtual_size, size_t file_size = 0, void* p_init_with = nullptr)
             {
                 if (file_size != 0)
                     this->p_init_with = p_init_with;
@@ -60,13 +62,14 @@ namespace EzPE
                 if (virtual_size == 0 || virtual_size < file_size)
                     pe.setError("Failed to set section data. Invalid virtual size.");
 
+                header.VirtualAddress = pe.alignToSection(pe.findLastSectionAlignedSection()->VirtualAddress + pe.findLastSectionAlignedSection()->Misc.VirtualSize);
                 header.Misc.VirtualSize = virtual_size;
                 header.SizeOfRawData = pe.alignToFile(file_size);
 
                 return *this;
             }
 
-            Section &characteristics(uint32_t input)
+            Section& characteristics(uint32_t input)
             {
                 header.Characteristics = input;
                 return *this;
@@ -74,25 +77,55 @@ namespace EzPE
 
             void insert()
             {
-                // TODO
+                if (!pe.is_loaded)
+                {
+                    pe.setError("insert(): PE is not loaded");
+                    return;
+                }
+
+                if (pe.hasProperty(PE_Properties::MAPPED))
+                {
+                    pe.setError("insert(): Cannot insert section into a mapped PE");
+                    return;
+                }
+
+                size_t current_physical_size{ pe.getPhysicalSize() };
+                size_t current_headers_size{ sizeof(IMAGE_DOS_HEADER) + sizeof(IMAGE_NT_HEADERS) + sizeof(IMAGE_SECTION_HEADER) * pe.p_file_header->NumberOfSections };
+                size_t new_physical_size{ current_physical_size + sizeof(IMAGE_SECTION_HEADER) + header.SizeOfRawData };
+                uint8_t* p_new_allocation{ new uint8_t[new_physical_size] };
+
+                pe.p_file_header->NumberOfSections++;
+                pe.p_optional_header->SizeOfImage = pe.alignToSection(header.VirtualAddress + header.Misc.VirtualSize);
+                pe.p_optional_header->SizeOfInitializedData += header.SizeOfRawData;
+                memcpy(p_new_allocation, pe.p_dos_header, current_headers_size);
+                memcpy(p_new_allocation + current_headers_size, &header, sizeof(IMAGE_SECTION_HEADER));
+
+                for (int i{}; i < pe.p_file_header->NumberOfSections - 1; i++)
+                {
+                    IMAGE_SECTION_HEADER& current_section_header{ pe.p_first_section_header[i] };
+                    size_t section_data_size{ current_section_header.SizeOfRawData };
+                }
+
+                delete pe.p_dos_header;
+                pe.p_dos_header = reinterpret_cast<IMAGE_DOS_HEADER*>(p_new_allocation);
             }
 
         private:
-            void *p_init_with;
-            PE &pe;
+            void* p_init_with;
+            PE& pe;
         };
 
         //
         // [LOCAL_SECTION] Variables and constants
         //
 
-        IMAGE_DOS_HEADER *p_dos_header{};
-        uint8_t *p_dos_stub{};
-        uint32_t *p_signature{};
-        IMAGE_FILE_HEADER *p_file_header{};
-        IMAGE_OPTIONAL_HEADER *p_optional_header{};
-        IMAGE_SECTION_HEADER *p_first_section_header{};
-        uint8_t *p_start_of_data{};
+        IMAGE_DOS_HEADER* p_dos_header{};
+        uint8_t* p_dos_stub{};
+        uint32_t* p_signature{};
+        IMAGE_FILE_HEADER* p_file_header{};
+        IMAGE_OPTIONAL_HEADER* p_optional_header{};
+        IMAGE_SECTION_HEADER* p_first_section_header{};
+        uint8_t* p_start_of_data{};
         PE_Properties properties{};
 
         //
@@ -101,12 +134,12 @@ namespace EzPE
 
         PE() {};
 
-        PE(const char *path, PE_Properties specified_properties)
+        PE(const char* path, PE_Properties specified_properties)
         {
             loadFromFile(path, specified_properties);
         }
 
-        PE(void *module, PE_Properties specified_properties)
+        PE(void* module, PE_Properties specified_properties)
         {
             loadFromMemory(module, specified_properties);
         }
@@ -116,15 +149,15 @@ namespace EzPE
             loadFromResource(h_resource, specified_properties);
         }
 
-        PE(const PE &) = delete;
-        PE &operator=(const PE &) = delete;
+        PE(const PE&) = delete;
+        PE& operator=(const PE&) = delete;
 
         ~PE()
         {
             clear();
         }
 
-        bool loadFromFile(const char *path, PE_Properties specified_properties)
+        bool loadFromFile(const char* path, PE_Properties specified_properties)
         {
             if (is_loaded)
             {
@@ -139,7 +172,7 @@ namespace EzPE
                 return false;
             }
 
-            size_t file_size{static_cast<size_t>(file.tellg())};
+            size_t file_size{ static_cast<size_t>(file.tellg()) };
             file.seekg(0);
 
             if (file_size < sizeof(IMAGE_DOS_HEADER))
@@ -149,10 +182,10 @@ namespace EzPE
             }
 
             // Allocate memory and read entire file
-            p_dos_header = reinterpret_cast<IMAGE_DOS_HEADER *>(new char[file_size]);
+            p_dos_header = reinterpret_cast<IMAGE_DOS_HEADER*>(new char[file_size]);
             properties = specified_properties;
             is_allocated = true;
-            file.read(reinterpret_cast<char *>(p_dos_header), file_size);
+            file.read(reinterpret_cast<char*>(p_dos_header), file_size);
 
             if (file.gcount() != file_size)
             {
@@ -166,7 +199,7 @@ namespace EzPE
             return is_loaded;
         }
 
-        bool loadFromMemory(void *module, PE_Properties specified_properties)
+        bool loadFromMemory(void* module, PE_Properties specified_properties)
         {
             if (is_loaded)
             {
@@ -174,8 +207,8 @@ namespace EzPE
                 return false;
             }
 
-            const uintptr_t base{reinterpret_cast<uintptr_t>(module)};
-            p_dos_header = reinterpret_cast<IMAGE_DOS_HEADER *>(base);
+            const uintptr_t base{ reinterpret_cast<uintptr_t>(module) };
+            p_dos_header = reinterpret_cast<IMAGE_DOS_HEADER*>(base);
 
             if (p_dos_header->e_magic != IMAGE_DOS_SIGNATURE)
             {
@@ -184,8 +217,8 @@ namespace EzPE
                 return false;
             }
 
-            p_dos_stub = reinterpret_cast<uint8_t *>(base + sizeof(*p_dos_header));
-            p_signature = reinterpret_cast<uint32_t *>(base + p_dos_header->e_lfanew);
+            p_dos_stub = reinterpret_cast<uint8_t*>(base + sizeof(*p_dos_header));
+            p_signature = reinterpret_cast<uint32_t*>(base + p_dos_header->e_lfanew);
 
             if (*p_signature != IMAGE_NT_SIGNATURE)
             {
@@ -195,8 +228,8 @@ namespace EzPE
                 return false;
             }
 
-            p_file_header = reinterpret_cast<IMAGE_FILE_HEADER *>(reinterpret_cast<uintptr_t>(p_signature) + sizeof(*p_signature));
-            p_optional_header = reinterpret_cast<IMAGE_OPTIONAL_HEADER *>(reinterpret_cast<uintptr_t>(p_file_header) + sizeof(*p_file_header));
+            p_file_header = reinterpret_cast<IMAGE_FILE_HEADER*>(reinterpret_cast<uintptr_t>(p_signature) + sizeof(*p_signature));
+            p_optional_header = reinterpret_cast<IMAGE_OPTIONAL_HEADER*>(reinterpret_cast<uintptr_t>(p_file_header) + sizeof(*p_file_header));
 
             is_loaded = true;
             properties = specified_properties;
@@ -212,7 +245,7 @@ namespace EzPE
                 return false;
             }
 
-            HGLOBAL h_memory{LoadResource(0, h_resource)};
+            HGLOBAL h_memory{ LoadResource(0, h_resource) };
 
             if (!h_memory)
             {
@@ -220,8 +253,8 @@ namespace EzPE
                 return false;
             }
 
-            DWORD resource_size{SizeofResource(0, h_resource)};
-            LPVOID p_resource_data{LockResource(h_memory)};
+            DWORD resource_size{ SizeofResource(0, h_resource) };
+            LPVOID p_resource_data{ LockResource(h_memory) };
 
             if (!p_resource_data || resource_size == 0)
             {
@@ -229,7 +262,7 @@ namespace EzPE
                 return false;
             }
 
-            p_dos_header = reinterpret_cast<IMAGE_DOS_HEADER *>(new char[resource_size]);
+            p_dos_header = reinterpret_cast<IMAGE_DOS_HEADER*>(new char[resource_size]);
             properties = specified_properties;
             is_allocated = true;
             memcpy(p_dos_header, p_resource_data, resource_size);
@@ -252,18 +285,18 @@ namespace EzPE
                 return nullptr;
             }
 
-            uintptr_t const base{reinterpret_cast<uintptr_t>(p_dos_header)};
+            uintptr_t const base{ reinterpret_cast<uintptr_t>(p_dos_header) };
 
             IMAGE_EXPORT_DIRECTORY* p_export_directory
-            {reinterpret_cast<IMAGE_EXPORT_DIRECTORY*>(base + p_optional_header->DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress)};
-            
-            uint32_t* export_names{reinterpret_cast<uint32_t*>(base + p_export_directory->AddressOfNames)};
-            uint32_t* export_offsets{reinterpret_cast<uint32_t*>(base + p_export_directory->AddressOfFunctions)};
-            uint16_t* export_ordinals{reinterpret_cast<uint16_t*>(base + p_export_directory->AddressOfNameOrdinals)};
+            { reinterpret_cast<IMAGE_EXPORT_DIRECTORY*>(base + p_optional_header->DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress) };
 
-            for (int32_t i{0}; i != p_export_directory->NumberOfFunctions; ++i)
+            uint32_t* export_names{ reinterpret_cast<uint32_t*>(base + p_export_directory->AddressOfNames) };
+            uint32_t* export_offsets{ reinterpret_cast<uint32_t*>(base + p_export_directory->AddressOfFunctions) };
+            uint16_t* export_ordinals{ reinterpret_cast<uint16_t*>(base + p_export_directory->AddressOfNameOrdinals) };
+
+            for (int32_t i{ 0 }; i != p_export_directory->NumberOfFunctions; ++i)
             {
-                std::string current_export_name{reinterpret_cast<const char*>(base + export_names[i])};
+                std::string current_export_name{ reinterpret_cast<const char*>(base + export_names[i]) };
 
                 if (export_name == current_export_name)
                 {
@@ -297,16 +330,16 @@ namespace EzPE
             return ((value + p_optional_header->FileAlignment - 1) / p_optional_header->FileAlignment) * p_optional_header->FileAlignment;
         }
 
-        IMAGE_SECTION_HEADER *findLastFileAlignedSection() const
+        IMAGE_SECTION_HEADER* findLastFileAlignedSection() const
         {
             if (!is_loaded || p_first_section_header == nullptr)
                 return nullptr;
 
-            IMAGE_SECTION_HEADER *p_last_section{};
+            IMAGE_SECTION_HEADER* p_last_section{};
 
             for (int i{}; i < p_file_header->NumberOfSections; i++)
             {
-                IMAGE_SECTION_HEADER &current_section_header{p_first_section_header[i]};
+                IMAGE_SECTION_HEADER& current_section_header{ p_first_section_header[i] };
 
                 if (current_section_header.SizeOfRawData == 0)
                     continue;
@@ -318,22 +351,73 @@ namespace EzPE
             return p_last_section;
         }
 
-        IMAGE_SECTION_HEADER *findLastSectionAlignedSection() const
+        IMAGE_SECTION_HEADER* findLastSectionAlignedSection() const
         {
             if (!is_loaded || p_first_section_header == nullptr)
                 return nullptr;
 
-            IMAGE_SECTION_HEADER *p_last_section{};
+            IMAGE_SECTION_HEADER* p_last_section{};
 
             for (int i{}; i < p_file_header->NumberOfSections; i++)
             {
-                IMAGE_SECTION_HEADER &current_section_header{p_first_section_header[i]};
+                IMAGE_SECTION_HEADER& current_section_header{ p_first_section_header[i] };
 
                 if (p_last_section == nullptr || current_section_header.VirtualAddress > p_last_section->VirtualAddress)
                     p_last_section = &current_section_header;
             }
 
             return p_last_section;
+        }
+
+        IMAGE_SECTION_HEADER* findSectionByName(const char* name)
+        {
+            if (!is_loaded || p_first_section_header == nullptr)
+            {
+                setError("findSectionByName(): PE is not loaded");
+                return nullptr;
+            }
+
+            for (int i{}; i < p_file_header->NumberOfSections; i++)
+            {
+                if (strncmp(reinterpret_cast<const char*>(p_first_section_header[i].Name), name, 8) == 0)
+                    return &p_first_section_header[i];
+            }
+
+            setError("findSectionByName(): Section \"%s\" not found", name);
+            return nullptr;
+        }
+
+        uint8_t* getSectionData(const IMAGE_SECTION_HEADER& section_header)
+        {
+            if (!is_loaded || p_start_of_data == nullptr)
+            {
+                setError("getSectionData(): PE is not loaded");
+                return nullptr;
+            }
+
+            if (hasProperty(PE_Properties::MAPPED))
+                return p_start_of_data + section_header.VirtualAddress;
+
+            return p_start_of_data + section_header.PointerToRawData;
+        }
+
+        size_t getPhysicalSize()
+        {
+            if (!is_loaded || p_first_section_header == nullptr)
+            {
+                setError("getPhysicalSize(): PE is not loaded");
+                return 0;
+            }
+
+            IMAGE_SECTION_HEADER* p_last_section{ findLastFileAlignedSection() };
+
+            if (p_last_section == nullptr)
+            {
+                setError("getPhysicalSize(): Failed to get last section aligned section");
+                return 0;
+            }
+
+            return p_last_section->PointerToRawData + p_last_section->SizeOfRawData;
         }
 
         void clear(bool clear_error_string = true)
@@ -368,7 +452,7 @@ namespace EzPE
         // [LOCAL_SECTION] Getters
         //
 
-        const std::string &getErrorMessage() const
+        const std::string& getErrorMessage() const
         {
             return error_message;
         }
@@ -387,7 +471,7 @@ namespace EzPE
         // [LOCAL_SECTION] Setters
         //
 
-        void setError(std::string fmt, ...)
+        void setError(std::string_view fmt, ...)
         {
             /* Clear error if empty message */
             if (fmt.size() == 0)
@@ -400,8 +484,8 @@ namespace EzPE
             va_list args;
             va_start(args, fmt);
 
-            char *buf{new char[0x1000]};
-            vsprintf_s(buf, 0x1000, fmt.c_str(), args);
+            char* buf{ new char[0x1000] };
+            vsprintf_s(buf, 0x1000, fmt.data(), args);
             error_message = buf;
 
             delete[] buf;
@@ -410,6 +494,10 @@ namespace EzPE
         }
 
     private:
+        //
+        // [LOCAL_SECTION] Variables and constants
+        //
+
         std::string error_message;
         bool has_error{};
         bool is_loaded{};
@@ -428,7 +516,7 @@ namespace EzPE
                 return false;
             }
 
-            size_t file_nt_size{p_dos_header->e_lfanew + sizeof(uint32_t) + sizeof(IMAGE_FILE_HEADER) + sizeof(IMAGE_OPTIONAL_HEADER)};
+            size_t file_nt_size{ p_dos_header->e_lfanew + sizeof(uint32_t) + sizeof(IMAGE_FILE_HEADER) + sizeof(IMAGE_OPTIONAL_HEADER) };
 
             if (size < file_nt_size)
             {
@@ -438,8 +526,8 @@ namespace EzPE
             }
 
             // Set up pointers
-            p_dos_stub = reinterpret_cast<uint8_t *>(reinterpret_cast<uintptr_t>(p_dos_header) + sizeof(IMAGE_DOS_HEADER));
-            p_signature = reinterpret_cast<uint32_t *>(reinterpret_cast<uintptr_t>(p_dos_header) + p_dos_header->e_lfanew);
+            p_dos_stub = reinterpret_cast<uint8_t*>(reinterpret_cast<uintptr_t>(p_dos_header) + sizeof(IMAGE_DOS_HEADER));
+            p_signature = reinterpret_cast<uint32_t*>(reinterpret_cast<uintptr_t>(p_dos_header) + p_dos_header->e_lfanew);
 
             if (*p_signature != IMAGE_NT_SIGNATURE)
             {
@@ -448,9 +536,9 @@ namespace EzPE
                 return false;
             }
 
-            p_file_header = reinterpret_cast<IMAGE_FILE_HEADER *>(reinterpret_cast<uintptr_t>(p_signature) + sizeof(uint32_t));
+            p_file_header = reinterpret_cast<IMAGE_FILE_HEADER*>(reinterpret_cast<uintptr_t>(p_signature) + sizeof(uint32_t));
 
-            size_t theoretical_section_headers_size{p_file_header->NumberOfSections * sizeof(IMAGE_SECTION_HEADER)};
+            size_t theoretical_section_headers_size{ p_file_header->NumberOfSections * sizeof(IMAGE_SECTION_HEADER) };
             if (size < file_nt_size + theoretical_section_headers_size)
             {
                 clear();
@@ -458,20 +546,20 @@ namespace EzPE
                 return false;
             }
 
-            p_optional_header = reinterpret_cast<IMAGE_OPTIONAL_HEADER *>(reinterpret_cast<uintptr_t>(p_file_header) + sizeof(IMAGE_FILE_HEADER));
+            p_optional_header = reinterpret_cast<IMAGE_OPTIONAL_HEADER*>(reinterpret_cast<uintptr_t>(p_file_header) + sizeof(IMAGE_FILE_HEADER));
 
             if (p_file_header->NumberOfSections > 0)
             {
-                p_first_section_header = reinterpret_cast<IMAGE_SECTION_HEADER *>(reinterpret_cast<uintptr_t>(p_optional_header) + sizeof(IMAGE_OPTIONAL_HEADER));
+                p_first_section_header = reinterpret_cast<IMAGE_SECTION_HEADER*>(reinterpret_cast<uintptr_t>(p_optional_header) + sizeof(IMAGE_OPTIONAL_HEADER));
 
                 if (hasProperty(PE_Properties::DATA))
                 {
-                    p_start_of_data = reinterpret_cast<uint8_t *>(reinterpret_cast<uintptr_t>(p_first_section_header) + theoretical_section_headers_size);
+                    p_start_of_data = reinterpret_cast<uint8_t*>(reinterpret_cast<uintptr_t>(p_first_section_header) + theoretical_section_headers_size);
 
                     /* Sections data validation depends on if the image was resolved on not */
                     if (hasProperty(PE_Properties::MAPPED))
                     {
-                        IMAGE_SECTION_HEADER *p_last_section{findLastSectionAlignedSection()};
+                        IMAGE_SECTION_HEADER* p_last_section{ findLastSectionAlignedSection() };
 
                         if (p_last_section == nullptr)
                         {
@@ -489,7 +577,7 @@ namespace EzPE
                     }
                     else
                     {
-                        IMAGE_SECTION_HEADER *p_last_section{findLastFileAlignedSection()};
+                        IMAGE_SECTION_HEADER* p_last_section{ findLastFileAlignedSection() };
 
                         /* It "could" be possible that no section has raw data */
                         if (p_last_section != nullptr && size < p_last_section->PointerToRawData + p_last_section->SizeOfRawData)
