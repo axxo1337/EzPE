@@ -106,7 +106,7 @@ namespace EzPE
                     size_t section_data_size{ current_section_header.SizeOfRawData };
                 }
 
-                delete pe.p_dos_header;
+                delete[] reinterpret_cast<uint8_t*>(pe.p_dos_header);
                 pe.p_dos_header = reinterpret_cast<IMAGE_DOS_HEADER*>(p_new_allocation);
             }
 
