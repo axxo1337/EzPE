@@ -248,7 +248,7 @@ namespace EzPE
             return is_loaded;
         }
 
-        void* getExportedFunction(std::string export_name)
+        void* getExportedFunction(std::string_view export_name)
         {
             if (!is_loaded || !p_optional_header)
             {
@@ -273,7 +273,7 @@ namespace EzPE
 
             for (int32_t i{ 0 }; i != p_export_directory->NumberOfFunctions; ++i)
             {
-                std::string current_export_name{ reinterpret_cast<const char*>(base + export_names[i]) };
+                std::string_view current_export_name{ reinterpret_cast<const char*>(base + export_names[i]) };
 
                 if (export_name == current_export_name)
                 {
@@ -281,7 +281,7 @@ namespace EzPE
                 }
             }
 
-            setError("getExportedFunction(): could not find exported function %s", export_name.c_str());
+            setError("getExportedFunction(): could not find exported function %s", export_name.data());
             return nullptr;
         }
 
