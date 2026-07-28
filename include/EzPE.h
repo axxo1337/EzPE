@@ -134,7 +134,7 @@ namespace EzPE
 
         PE() {};
 
-        PE(const char* path, PE_Properties specified_properties)
+        PE(const char* path, PE_Properties specified_properties = PE_Properties::DATA)
         {
             loadFromFile(path, specified_properties);
         }
@@ -207,34 +207,11 @@ namespace EzPE
                 return false;
             }
 
-            const uintptr_t base{ reinterpret_cast<uintptr_t>(module) };
-            p_dos_header = reinterpret_cast<IMAGE_DOS_HEADER*>(base);
-
-            if (p_dos_header->e_magic != IMAGE_DOS_SIGNATURE)
-            {
-                setError("loadFromMemory(): Invalid DOS signature \"0x%x\", should be 0x%x", p_dos_header->e_magic, IMAGE_DOS_SIGNATURE);
-                clear(false);
-                return false;
-            }
-
-            p_dos_stub = reinterpret_cast<uint8_t*>(base + sizeof(*p_dos_header));
-            p_signature = reinterpret_cast<uint32_t*>(base + p_dos_header->e_lfanew);
-
-            if (*p_signature != IMAGE_NT_SIGNATURE)
-            {
-                setError("loadFromMemory(): Invalid NT signature \"0x%x\", should be 0x%x", *p_signature, IMAGE_NT_SIGNATURE);
-                clear(false);
-
-                return false;
-            }
-
-            p_file_header = reinterpret_cast<IMAGE_FILE_HEADER*>(reinterpret_cast<uintptr_t>(p_signature) + sizeof(*p_signature));
-            p_optional_header = reinterpret_cast<IMAGE_OPTIONAL_HEADER*>(reinterpret_cast<uintptr_t>(p_file_header) + sizeof(*p_file_header));
-
-            is_loaded = true;
+            p_dos_header = reinterpret_cast<IMAGE_DOS_HEADER*>(module);
             properties = specified_properties;
+            is_loaded = validate();
 
-            return true;
+            return is_loaded;
         }
 
         bool loadFromResource(HRSRC h_resource, PE_Properties specified_properties)
@@ -507,7 +484,7 @@ namespace EzPE
         // [LOCAL_SECTION] Utilities
         //
 
-        bool validate(size_t size)
+        bool validate(size_t size = 0)
         {
             if (p_dos_header->e_magic != IMAGE_DOS_SIGNATURE)
             {
@@ -518,7 +495,7 @@ namespace EzPE
 
             size_t file_nt_size{ p_dos_header->e_lfanew + sizeof(uint32_t) + sizeof(IMAGE_FILE_HEADER) + sizeof(IMAGE_OPTIONAL_HEADER) };
 
-            if (size < file_nt_size)
+            if (size > 0 && size < file_nt_size)
             {
                 clear();
                 setError("validate(): File's size is not large enough to possibly contain all NT headers");
@@ -539,7 +516,7 @@ namespace EzPE
             p_file_header = reinterpret_cast<IMAGE_FILE_HEADER*>(reinterpret_cast<uintptr_t>(p_signature) + sizeof(uint32_t));
 
             size_t theoretical_section_headers_size{ p_file_header->NumberOfSections * sizeof(IMAGE_SECTION_HEADER) };
-            if (size < file_nt_size + theoretical_section_headers_size)
+            if (size > 0 && size < file_nt_size + theoretical_section_headers_size)
             {
                 clear();
                 setError("validate(): File is missing some or all of its section headers");
@@ -568,7 +545,7 @@ namespace EzPE
                             return false;
                         }
 
-                        if (size < p_last_section->VirtualAddress + p_last_section->Misc.VirtualSize)
+                        if (size > 0 && size < p_last_section->VirtualAddress + p_last_section->Misc.VirtualSize)
                         {
                             clear();
                             setError("validate(): File's size is too small to possibly contain all the sections' data");
@@ -580,7 +557,7 @@ namespace EzPE
                         IMAGE_SECTION_HEADER* p_last_section{ findLastFileAlignedSection() };
 
                         /* It "could" be possible that no section has raw data */
-                        if (p_last_section != nullptr && size < p_last_section->PointerToRawData + p_last_section->SizeOfRawData)
+                        if (p_last_section != nullptr && size > 0 && size < p_last_section->PointerToRawData + p_last_section->SizeOfRawData)
                         {
                             clear();
                             setError("validate(): Resource size is too small to possibly contain all the sections' data");
