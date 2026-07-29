@@ -1,11 +1,12 @@
 //  ______     _____  ______
 // |  ____|   |  __ \|  ____|
 // | |__   ___| |__) | |__
-// |  __| |_  /  ___/|  __|    PE header-only utility library
-// | |____ / /| |    | |____   version 0.0.0
-// |______/___|_|    |______|  https://github.com/haxo-games/EzPE
+// |  __| |_  /  ___/|  __|    PE header-only utility library.
+// | |____ / /| |    | |____   version 1.0.0
+// |______/___|_|    |______|  https://github.com/axxo1337/EzPE
 //
 // SPDX-FileCopyrightText: 2024 - 2025 Haxo Games Inc. <https://haxo.games>
+// SPDX-FileCopyrightText. 2025 - 2026 axxo1337.       <https://axxowastaken.me>
 // SPDX-License-Identifier: MIT
 
 #pragma once
