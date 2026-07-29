@@ -5,8 +5,27 @@
 A portable executable (PE) header-only utility library.
 
 ## Usage
+```cpp
+// A simple example about parsing a PE file.
 
-TODO
+EzPE::PE pe("target.exe");
+
+void* func = pe.getExportedFunction("SomeExportedFunction");
+if (func)
+  printf("Found export at: %p\n", func);
+
+IMAGE_SECTION_HEADER* section = pe.findSectionByName(".text");
+if (section)
+  printf(".text VirtualAddress: 0x%X\n", section->VirtualAddress);
+
+if (section)
+{
+  uint8_t* data = pe.getSectionData(*section);
+  // ...
+}
+
+pe.clear();
+```
 
 ## Contributing
 
