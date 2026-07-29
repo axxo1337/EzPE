@@ -60,12 +60,13 @@ namespace EzPE
                 if (file_size != 0)
                     this->p_init_with = p_init_with;
 
-                if (virtual_size == 0 || virtual_size < file_size)
+                if (virtual_size == 0 || (file_size != 0 && virtual_size < file_size))
                     pe.setError("Failed to set section data. Invalid virtual size.");
 
-                header.Misc.VirtualSize = virtual_size;
-                header.VirtualAddress = pe.alignToSection(pe.findLastSection()->VirtualAddress + pe.findLastSection()->Misc.VirtualSize);
-                header.SizeOfRawData = pe.alignToFile(file_size);
+                this->file_size_bytes = file_size;
+                header.Misc.VirtualSize = static_cast<DWORD>(virtual_size);
+                header.VirtualAddress = pe.alignToSection(pe.findLastSection() ? pe.findLastSection()->VirtualAddress + pe.findLastSection()->Misc.VirtualSize : 0x1000);
+                header.SizeOfRawData = pe.alignToFile(static_cast<DWORD>(file_size));
 
                 return *this;
             }
@@ -90,10 +91,15 @@ namespace EzPE
                     return;
                 }
 
-                size_t current_headers_size{ sizeof(IMAGE_DOS_HEADER) + sizeof(IMAGE_NT_HEADERS) + sizeof(IMAGE_SECTION_HEADER) * pe.p_file_header->NumberOfSections };
+                IMAGE_SECTION_HEADER* p_last_file_sec{ pe.findLastFileAlignedSection() };
+                header.PointerToRawData = p_last_file_sec ? p_last_file_sec->PointerToRawData + p_last_file_sec->SizeOfRawData : pe.alignToFile(sizeof(IMAGE_DOS_HEADER));
+
+                size_t current_headers_end{ pe.p_dos_header->e_lfanew + sizeof(uint32_t) + sizeof(IMAGE_FILE_HEADER) + pe.p_file_header->SizeOfOptionalHeader + (sizeof(IMAGE_SECTION_HEADER) * pe.p_file_header->NumberOfSections) };
+
                 size_t current_physical_size{ pe.getPhysicalSize() };
                 size_t new_physical_size{ current_physical_size + sizeof(IMAGE_SECTION_HEADER) + header.SizeOfRawData };
                 uint8_t* p_new_allocation{ new uint8_t[new_physical_size] };
+                memset(p_new_allocation, 0, new_physical_size);
                 uint8_t* p_old_allocation{ reinterpret_cast<uint8_t*>(pe.p_dos_header) };
 
                 // Update PE fields
@@ -101,9 +107,10 @@ namespace EzPE
                 pe.p_optional_header->SizeOfImage = pe.alignToSection(header.VirtualAddress + header.Misc.VirtualSize);
                 pe.p_optional_header->SizeOfInitializedData += header.SizeOfRawData;
 
-                // Copy the old headers and the new section into the new buffer
-                memcpy(p_new_allocation, p_old_allocation, current_headers_size);
-                memcpy(p_new_allocation + current_headers_size, &header, sizeof(IMAGE_SECTION_HEADER));
+                // Copy old headers
+                memcpy(p_new_allocation, p_old_allocation, current_headers_end);
+                // Copy new section header
+                memcpy(p_new_allocation + current_headers_end, &header, sizeof(IMAGE_SECTION_HEADER));
 
                 /* Copy the sections data and resolve relocations */
                 for (int i{}; i < pe.p_file_header->NumberOfSections - 1; i++)
@@ -115,13 +122,17 @@ namespace EzPE
                         memcpy(p_new_allocation + current_section_header.PointerToRawData, p_old_allocation + current_section_header.PointerToRawData, section_data_size);
                 }
 
+                if (p_init_with && header.PointerToRawData > 0)
+                    memcpy(p_new_allocation + header.PointerToRawData, p_init_with, file_size_bytes > 0 ? file_size_bytes : header.SizeOfRawData);
+
                 delete[] p_old_allocation;
                 pe.p_dos_header = reinterpret_cast<IMAGE_DOS_HEADER*>(p_new_allocation);
                 pe.validate(new_physical_size);
             }
 
         private:
-            void* p_init_with;
+            void* p_init_with{};
+            size_t file_size_bytes{};
             PE& pe;
         };
 
@@ -376,16 +387,18 @@ namespace EzPE
 
         uint8_t* getSectionData(const IMAGE_SECTION_HEADER& section_header)
         {
-            if (!is_loaded || p_start_of_data == nullptr)
+            if (!is_loaded || p_dos_header == nullptr)
             {
                 setError("getSectionData(): PE is not loaded");
                 return nullptr;
             }
 
-            if (hasProperty(PE_Properties::MAPPED))
-                return p_start_of_data + section_header.VirtualAddress;
+            uint8_t* base{ reinterpret_cast<uint8_t*>(p_dos_header) };
 
-            return p_start_of_data + section_header.PointerToRawData;
+            if (hasProperty(PE_Properties::MAPPED))
+                return base + section_header.VirtualAddress;
+
+            return base + section_header.PointerToRawData;
         }
 
         size_t getPhysicalSize()
