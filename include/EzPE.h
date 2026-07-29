@@ -62,8 +62,8 @@ namespace EzPE
                 if (virtual_size == 0 || virtual_size < file_size)
                     pe.setError("Failed to set section data. Invalid virtual size.");
 
-                header.VirtualAddress = pe.alignToSection(pe.findLastSectionAlignedSection()->VirtualAddress + pe.findLastSectionAlignedSection()->Misc.VirtualSize);
                 header.Misc.VirtualSize = virtual_size;
+                header.VirtualAddress = pe.alignToSection(pe.findLastSection()->VirtualAddress + pe.findLastSection()->Misc.VirtualSize);
                 header.SizeOfRawData = pe.alignToFile(file_size);
 
                 return *this;
@@ -89,25 +89,34 @@ namespace EzPE
                     return;
                 }
 
-                size_t current_physical_size{ pe.getPhysicalSize() };
                 size_t current_headers_size{ sizeof(IMAGE_DOS_HEADER) + sizeof(IMAGE_NT_HEADERS) + sizeof(IMAGE_SECTION_HEADER) * pe.p_file_header->NumberOfSections };
+                size_t current_physical_size{ pe.getPhysicalSize() };
                 size_t new_physical_size{ current_physical_size + sizeof(IMAGE_SECTION_HEADER) + header.SizeOfRawData };
                 uint8_t* p_new_allocation{ new uint8_t[new_physical_size] };
+                uint8_t* p_old_allocation{ reinterpret_cast<uint8_t*>(pe.p_dos_header) };
 
+                // Update PE fields
                 pe.p_file_header->NumberOfSections++;
                 pe.p_optional_header->SizeOfImage = pe.alignToSection(header.VirtualAddress + header.Misc.VirtualSize);
                 pe.p_optional_header->SizeOfInitializedData += header.SizeOfRawData;
-                memcpy(p_new_allocation, pe.p_dos_header, current_headers_size);
+
+                // Copy the old headers and the new section into the new buffer
+                memcpy(p_new_allocation, p_old_allocation, current_headers_size);
                 memcpy(p_new_allocation + current_headers_size, &header, sizeof(IMAGE_SECTION_HEADER));
 
+                /* Copy the sections data and resolve relocations */
                 for (int i{}; i < pe.p_file_header->NumberOfSections - 1; i++)
                 {
                     IMAGE_SECTION_HEADER& current_section_header{ pe.p_first_section_header[i] };
                     size_t section_data_size{ current_section_header.SizeOfRawData };
+
+                    if (section_data_size > 0 && current_section_header.PointerToRawData > 0)
+                        memcpy(p_new_allocation + current_section_header.PointerToRawData, p_old_allocation + current_section_header.PointerToRawData, section_data_size);
                 }
 
-                delete[] reinterpret_cast<uint8_t*>(pe.p_dos_header);
+                delete[] p_old_allocation;
                 pe.p_dos_header = reinterpret_cast<IMAGE_DOS_HEADER*>(p_new_allocation);
+                pe.validate(new_physical_size);
             }
 
         private:
@@ -328,7 +337,7 @@ namespace EzPE
             return p_last_section;
         }
 
-        IMAGE_SECTION_HEADER* findLastSectionAlignedSection() const
+        IMAGE_SECTION_HEADER* findLastSection() const
         {
             if (!is_loaded || p_first_section_header == nullptr)
                 return nullptr;
@@ -536,7 +545,7 @@ namespace EzPE
                     /* Sections data validation depends on if the image was resolved on not */
                     if (hasProperty(PE_Properties::MAPPED))
                     {
-                        IMAGE_SECTION_HEADER* p_last_section{ findLastSectionAlignedSection() };
+                        IMAGE_SECTION_HEADER* p_last_section{ findLastSection() };
 
                         if (p_last_section == nullptr)
                         {
